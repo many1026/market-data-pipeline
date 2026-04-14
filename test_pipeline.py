@@ -1,25 +1,27 @@
 """
-test_pipeline.py — Integration smoke test. Run this BEFORE any full-scale download.
+test_pipeline.py — LIT mbp-10 full download (4-year window, all 15 venues).
 
 What it does
 ────────────
   Step 0 — Lists all datasets available in your Databento account
-            (use this to confirm ATS dataset IDs before the full run)
-  Step 1 — Downloads 3 tickers × 1 lit venue × Jan 2024 (mbp-10)
-  Step 2 — Downloads 3 tickers × 1 ATS venue × Jan 2024 (trades)
-  Step 3 — Validates all downloaded chunks (all 8 checks)
-  Step 4 — (Optional) Uploads to gs://{BUCKET}/test/ and verifies MD5
-  Step 5 — Prints full-run cost & time estimate
+  Step 1 — Downloads tickers × 15 lit venues × 4 years (mbp-10)
+            Date range: 2022-04-13 → 2026-04-13
+  Step 2 — Validates all downloaded chunks (all 8 checks)
+  Step 3 — (Optional) Uploads to gs://{BUCKET}/raw/ and verifies MD5
+  Step 4 — Prints full-run cost & time estimate
 
 Usage:
   cd pipeline/
-  python test_pipeline.py                  # full test (needs API key)
-  python test_pipeline.py --list-only      # only list available datasets
-  python test_pipeline.py --skip-upload    # skip GCS step
+  python test_pipeline.py                              # all tickers from tickers.csv
+  python test_pipeline.py --tickers AAPL,MSFT,NVDA    # specific tickers
+  python test_pipeline.py --tickers AAPL --list-only  # only list available datasets
+  python test_pipeline.py --tickers AAPL --skip-upload
+  python test_pipeline.py --tickers AAPL --dry-run    # estimate without downloading
+  python test_pipeline.py --tickers AAPL --force      # re-download even if cached
 
 Prerequisites:
   DATABENTO_API_KEY set in pipeline/.env
-  GCS_BUCKET set in pipeline/.env (optional — only for step 4)
+  GCS_BUCKET set in pipeline/.env (optional — only for step 3)
 """
 from __future__ import annotations
 
@@ -37,16 +39,11 @@ from config import (
     DATABENTO_API_KEY,
     GCS_BUCKET,
     LIT_SCHEMA,
-    ATS_SCHEMA,
     LIT_VENUES,
-    ATS_VENUES,
     TICKERS,
-    START_DATE,
-    END_DATE,
     ESTIMATE_MB_PER_CHUNK,
     ESTIMATE_USD_PER_GB,
     ESTIMATE_RECORDS_PER_CHUNK,
-    SCHEMA_VENUE_MAP,
 )
 from downloader import ChunkSpec, download_chunk, cache_path, generate_chunks
 from validator import validate_chunk
@@ -58,14 +55,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Test parameters ───────────────────────────────────────────────────────────
-# Small subset: 3 tickers, 1 month, 1 venue per type
-TEST_TICKERS      = ["AAPL", "GPRO", "GRPN"]   # mix of activity levels
-TEST_LIT_VENUES   = ["XNAS.ITCH"]               # Nasdaq — most liquid, good test
-TEST_ATS_VENUES   = ["FINN.NLS"]                # FINRA/Nasdaq TRF — largest ATS aggregator
-TEST_START        = "2024-01-01"
-TEST_END          = "2024-01-31"                # 1 month (one chunk per ticker/venue)
-TEST_GCS_PREFIX   = "test"
+# ── Fixed parameters ──────────────────────────────────────────────────────────
+# 4-year window: today is 2026-04-13
+DOWNLOAD_START  = "2022-04-13"
+DOWNLOAD_END    = "2026-04-13"
+DOWNLOAD_SCHEMA = LIT_SCHEMA          # mbp-10
+DOWNLOAD_VENUES = LIT_VENUES          # all 15 NMS lit exchanges
+GCS_PREFIX      = "raw"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,21 +84,16 @@ def step0_list_datasets() -> None:
         datasets = client.metadata.list_datasets()
         print(f"  Found {len(datasets)} datasets in your account:\n")
         for d in sorted(datasets):
-            tag = ""
-            if d in LIT_VENUES:
-                tag = "  ← lit exchange (mbp-10)"
-            elif d in ATS_VENUES:
-                tag = "  ← ATS/TRF (trades)"
+            tag = "  ← lit exchange (mbp-10)" if d in LIT_VENUES else ""
             print(f"    {d}{tag}")
 
-        # Check which configured ATS venues are actually available
-        missing_ats = [v for v in ATS_VENUES if v not in datasets]
-        if missing_ats:
-            print(f"\n  ⚠  ATS venues in config NOT found in your account:")
-            for v in missing_ats:
-                print(f"    - {v}  → remove from ATS_VENUES or check subscription")
+        missing = [v for v in LIT_VENUES if v not in datasets]
+        if missing:
+            print(f"\n  ⚠  LIT venues in config NOT found in your account:")
+            for v in missing:
+                print(f"    - {v}  → check subscription")
         else:
-            print(f"\n  ✓  All {len(ATS_VENUES)} configured ATS venues are available")
+            print(f"\n  ✓  All {len(LIT_VENUES)} configured LIT venues are available")
 
     except Exception as e:
         print(f"  ✗  Could not list datasets: {e}")
@@ -110,13 +101,16 @@ def step0_list_datasets() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 1 — Download lit (mbp-10)
+# Step 1 — Download lit (mbp-10) — tickers × 15 venues × 4 years
 # ─────────────────────────────────────────────────────────────────────────────
 
-def step1_download_lit() -> list[ChunkSpec]:
-    """Download mbp-10 data from 1 lit venue for 3 tickers × 1 month."""
+def step1_download_lit(tickers: list[str], dry_run: bool = False, force: bool = False) -> list[ChunkSpec]:
+    """Download mbp-10 data from all 15 LIT venues for the given tickers."""
     print("═" * 66)
-    print(f"  STEP 1 — Download LIT  [{LIT_SCHEMA}]  {TEST_LIT_VENUES}")
+    print(f"  STEP 1 — Download LIT  [{DOWNLOAD_SCHEMA}]")
+    print(f"  Tickers    : {tickers}")
+    print(f"  Venues     : {len(DOWNLOAD_VENUES)} (all lit US)")
+    print(f"  Date range : {DOWNLOAD_START} → {DOWNLOAD_END}")
     print("═" * 66)
 
     if not DATABENTO_API_KEY:
@@ -124,17 +118,25 @@ def step1_download_lit() -> list[ChunkSpec]:
         return []
 
     chunks = generate_chunks(
-        schema=LIT_SCHEMA,
-        tickers=TEST_TICKERS,
-        venues=TEST_LIT_VENUES,
-        start_date=TEST_START,
-        end_date=TEST_END,
+        schema=DOWNLOAD_SCHEMA,
+        tickers=tickers,
+        venues=DOWNLOAD_VENUES,
+        start_date=DOWNLOAD_START,
+        end_date=DOWNLOAD_END,
     )
+
+    print(f"  Total chunks: {len(chunks):,}  "
+          f"({len(tickers)} tickers × {len(DOWNLOAD_VENUES)} venues × "
+          f"{len(pd.period_range(DOWNLOAD_START, DOWNLOAD_END, freq='M'))} months)\n")
+
+    if dry_run:
+        print("  [dry-run] No downloads performed.\n")
+        return []
 
     downloaded: list[ChunkSpec] = []
     for chunk in chunks:
-        print(f"  → {chunk.symbol:<6} {chunk.venue:<18} {chunk.year_month}")
-        result = download_chunk(chunk, force=False)
+        print(f"  → {chunk.symbol:<6} {chunk.venue:<20} {chunk.year_month}")
+        result = download_chunk(chunk, force=force)
         icon = "✓" if result.success else "✗"
         print(f"    {icon}  {result.message}  ({result.elapsed:.1f}s)")
         if result.success:
@@ -145,48 +147,13 @@ def step1_download_lit() -> list[ChunkSpec]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 2 — Download ATS (trades)
+# Step 2 — Validation
 # ─────────────────────────────────────────────────────────────────────────────
 
-def step2_download_ats() -> list[ChunkSpec]:
-    """Download trades data from 1 ATS venue for 3 tickers × 1 month."""
-    print("═" * 66)
-    print(f"  STEP 2 — Download ATS  [{ATS_SCHEMA}]  {TEST_ATS_VENUES}")
-    print("═" * 66)
-
-    if not DATABENTO_API_KEY:
-        print("  ✗  DATABENTO_API_KEY not set — skipping\n")
-        return []
-
-    chunks = generate_chunks(
-        schema=ATS_SCHEMA,
-        tickers=TEST_TICKERS,
-        venues=TEST_ATS_VENUES,
-        start_date=TEST_START,
-        end_date=TEST_END,
-    )
-
-    downloaded: list[ChunkSpec] = []
-    for chunk in chunks:
-        print(f"  → {chunk.symbol:<6} {chunk.venue:<18} {chunk.year_month}")
-        result = download_chunk(chunk, force=False)
-        icon = "✓" if result.success else "✗"
-        print(f"    {icon}  {result.message}  ({result.elapsed:.1f}s)")
-        if result.success:
-            downloaded.append(chunk)
-
-    print(f"\n  {len(downloaded)}/{len(chunks)} chunks downloaded\n")
-    return downloaded
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Step 3 — Validation
-# ─────────────────────────────────────────────────────────────────────────────
-
-def step3_validate(chunks: list[ChunkSpec]) -> list[dict]:
+def step2_validate(chunks: list[ChunkSpec]) -> list[dict]:
     """Run all 8 data quality checks on every downloaded chunk."""
     print("═" * 66)
-    print("  STEP 3 — Validation (8 checks per chunk)")
+    print("  STEP 2 — Validation (8 checks per chunk)")
     print("═" * 66)
 
     if not chunks:
@@ -234,17 +201,17 @@ def step3_validate(chunks: list[ChunkSpec]) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — GCS upload + MD5 roundtrip (optional)
+# Step 3 — GCS upload + MD5 roundtrip (optional)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def step4_upload_and_verify(
+def step3_upload_and_verify(
     chunks: list[ChunkSpec],
     reports: list[dict],
     skip: bool = False,
 ) -> bool:
-    """Upload to gs://{BUCKET}/test/ and verify MD5 checksums."""
+    """Upload to gs://{BUCKET}/raw/ and verify MD5 checksums."""
     print("═" * 66)
-    print("  STEP 4 — GCS Upload + MD5 Roundtrip")
+    print("  STEP 3 — GCS Upload + MD5 Roundtrip")
     print("═" * 66)
 
     if skip:
@@ -268,7 +235,7 @@ def step4_upload_and_verify(
         for r in reports if r.get("quarantine")
     }
 
-    uploaded: list[tuple[ChunkSpec, str]] = []   # (chunk, gcs_uri)
+    uploaded: list[tuple[ChunkSpec, str]] = []
     for chunk in chunks:
         key = f"{chunk.symbol}|{chunk.venue}|{chunk.year_month}|{chunk.schema}"
         if key in quarantined_keys:
@@ -279,7 +246,7 @@ def step4_upload_and_verify(
             chunk, gcs_client,
             bq_client=None,
             overwrite=True,
-            gcs_prefix=TEST_GCS_PREFIX,
+            gcs_prefix=GCS_PREFIX,
             load_bq=False,
         )
         icon = "✓" if result.success else "✗"
@@ -317,70 +284,85 @@ def step4_upload_and_verify(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 5 — Full-run cost estimate
+# Step 4 — Cost & time estimate
 # ─────────────────────────────────────────────────────────────────────────────
 
-def step5_estimate() -> None:
-    """Print estimated cost, storage, and time for the full production run."""
+def step4_estimate(tickers: list[str]) -> None:
+    """Print estimated cost, storage, and time for this run."""
     print("═" * 66)
-    print("  STEP 5 — Full-run Estimate")
+    print("  STEP 4 — Run Estimate  (mbp-10, LIT, 4 years)")
     print("═" * 66)
 
-    n_tickers = len(TICKERS)
-    months    = pd.period_range(START_DATE, END_DATE, freq="M")
+    n_tickers = len(tickers)
+    n_venues  = len(DOWNLOAD_VENUES)
+    months    = pd.period_range(DOWNLOAD_START, DOWNLOAD_END, freq="M")
     n_months  = len(months)
+    n_chunks  = n_tickers * n_venues * n_months
 
-    total_cost = 0.0
-    for schema, venues in SCHEMA_VENUE_MAP.items():
-        n_venues = len(venues)
-        n_chunks = n_tickers * n_venues * n_months
-        rec_per  = ESTIMATE_RECORDS_PER_CHUNK.get(schema, 7_000)
-        mb_per   = ESTIMATE_MB_PER_CHUNK.get(schema, 1.0)
-        usd_per  = ESTIMATE_USD_PER_GB.get(schema, 1.0)
+    rec_per    = ESTIMATE_RECORDS_PER_CHUNK.get(DOWNLOAD_SCHEMA, 7_000)
+    mb_per     = ESTIMATE_MB_PER_CHUNK.get(DOWNLOAD_SCHEMA, 5.0)
+    usd_per_gb = ESTIMATE_USD_PER_GB.get(DOWNLOAD_SCHEMA, 2.0)
 
-        total_gb   = n_chunks * mb_per / 1024
-        cost       = total_gb * usd_per
-        total_cost += cost
-        est_hours  = n_chunks / 50.0
+    total_gb   = n_chunks * mb_per / 1024
+    total_cost = total_gb * usd_per_gb
+    est_hours  = n_chunks / 50.0
 
-        label = "LIT (mbp-10)" if schema == LIT_SCHEMA else "ATS (trades)"
-        print(f"\n  {label}")
-        print(f"    Venues × tickers × months : {n_venues} × {n_tickers} × {n_months} = {n_chunks:,} chunks")
-        print(f"    Est. records              : ~{n_chunks * rec_per / 1e9:.2f}B")
-        print(f"    Est. parquet storage      : ~{total_gb:.0f} GB")
-        print(f"    Est. API cost             : ~${cost:,.0f}")
-        print(f"    Est. download time        : ~{est_hours:.0f} hours  (4 workers)")
-
-    print(f"\n  TOTAL estimated API cost    : ~${total_cost:,.0f}")
-    print("  NOTE: Estimates are heuristic. Run `python main.py download --dry-run`")
-    print("        for a per-schema breakdown before spending API credits.")
+    print(f"\n  Schema     : {DOWNLOAD_SCHEMA}")
+    print(f"  Date range : {DOWNLOAD_START} → {DOWNLOAD_END}  ({n_months} months)")
+    print(f"  Tickers × venues × months : {n_tickers} × {n_venues} × {n_months} = {n_chunks:,} chunks")
+    print(f"  Est. records              : ~{n_chunks * rec_per / 1e9:.2f}B")
+    print(f"  Est. parquet storage      : ~{total_gb:.0f} GB")
+    print(f"  Est. API cost             : ~${total_cost:,.0f}")
+    print(f"  Est. download time        : ~{est_hours:.0f} hours  ({n_venues} venues / 4 workers)")
+    print("\n  NOTE: Run with --dry-run to see this estimate before spending API credits.")
     print("═" * 66 + "\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main
+# CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Pipeline smoke test")
-    p.add_argument("--list-only",    action="store_true",
+    p = argparse.ArgumentParser(
+        description="LIT mbp-10 full download — 15 venues × N tickers × 4 years"
+    )
+    p.add_argument(
+        "--tickers",
+        type=str,
+        default=None,
+        help="Comma-separated tickers to download (e.g. AAPL,MSFT,NVDA). "
+             "Defaults to all tickers in tickers.csv.",
+    )
+    p.add_argument("--list-only",   action="store_true",
                    help="Only list available Databento datasets (Step 0), then exit")
-    p.add_argument("--skip-upload",  action="store_true",
-                   help="Skip GCS upload step (Step 4)")
-    p.add_argument("--skip-ats",     action="store_true",
-                   help="Skip ATS download step (Step 2); useful if ATS IDs unverified")
+    p.add_argument("--skip-upload", action="store_true",
+                   help="Skip GCS upload step (Step 3)")
+    p.add_argument("--dry-run",     action="store_true",
+                   help="Print plan and cost estimate without downloading")
+    p.add_argument("--force",       action="store_true",
+                   help="Re-download even if cached parquet files already exist")
     return p
 
 
 def main() -> None:
     args = build_parser().parse_args()
 
+    # ── Resolve tickers ───────────────────────────────────────────────────────
+    if args.tickers:
+        tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
+    else:
+        tickers = TICKERS
+
+    if not tickers and not args.list_only:
+        print("  ✗  No tickers specified. Use --tickers AAPL,MSFT or add tickers.csv")
+        sys.exit(1)
+
     print("\n" + "═" * 66)
-    print("  PIPELINE SMOKE TEST")
-    print(f"  Tickers    : {TEST_TICKERS}")
-    print(f"  Date range : {TEST_START} → {TEST_END}  (1 month)")
-    print(f"  Lit schema : {LIT_SCHEMA}  @ {TEST_LIT_VENUES}")
-    print(f"  ATS schema : {ATS_SCHEMA}  @ {TEST_ATS_VENUES}")
+    print("  LIT MBP-10 DOWNLOAD  (4-year window)")
+    print(f"  Tickers    : {tickers}")
+    print(f"  Venues     : {len(DOWNLOAD_VENUES)} lit US exchanges")
+    print(f"  Schema     : {DOWNLOAD_SCHEMA}")
+    print(f"  Date range : {DOWNLOAD_START} → {DOWNLOAD_END}")
     print("═" * 66 + "\n")
 
     # Step 0: list available datasets
@@ -388,44 +370,36 @@ def main() -> None:
     if args.list_only:
         return
 
-    # Step 1: download lit
-    lit_chunks = step1_download_lit()
+    # Step 4 estimate (always printed first so user knows what they're about to run)
+    step4_estimate(tickers)
 
-    # Step 2: download ATS
-    ats_chunks: list[ChunkSpec] = []
-    if not args.skip_ats:
-        ats_chunks = step2_download_ats()
-    else:
-        print("  STEP 2 — ATS download skipped (--skip-ats)\n")
+    if args.dry_run:
+        return
 
-    all_chunks = lit_chunks + ats_chunks
+    # Step 1: download mbp-10 across all 15 lit venues
+    lit_chunks = step1_download_lit(tickers, dry_run=False, force=args.force)
 
-    # Step 3: validate
-    reports = step3_validate(all_chunks)
+    # Step 2: validate
+    reports = step2_validate(lit_chunks)
 
-    # Step 4: upload
-    ok = step4_upload_and_verify(all_chunks, reports, skip=args.skip_upload)
-
-    # Step 5: estimate
-    step5_estimate()
+    # Step 3: upload
+    ok = step3_upload_and_verify(lit_chunks, reports, skip=args.skip_upload)
 
     # ── Final verdict ─────────────────────────────────────────────────────────
     print("═" * 66)
     print("  RESULTS")
     print("─" * 66)
     quarantined = sum(1 for r in reports if r.get("quarantine"))
-    print(f"  Lit chunks downloaded  : {len(lit_chunks)}")
-    print(f"  ATS chunks downloaded  : {len(ats_chunks)}")
+    print(f"  Tickers downloaded     : {len(tickers)}")
+    print(f"  Venues                 : {len(DOWNLOAD_VENUES)}")
+    print(f"  Chunks downloaded      : {len(lit_chunks)}")
     print(f"  Validation passed      : {len(reports) - quarantined}/{len(reports)}")
     print(f"  GCS roundtrip          : {'✓' if ok else '⊘ skipped / ✗ failed'}")
 
-    if all_chunks and not quarantined:
-        print("\n  ✓  Smoke test passed. Safe to run the full pipeline:")
-        print("     python main.py download --mode lit")
-        print("     python main.py download --mode ats  # after verifying ATS IDs")
-    elif not all_chunks:
+    if lit_chunks and not quarantined:
+        print("\n  ✓  Download complete.")
+    elif not lit_chunks:
         print("\n  ⚠  No data downloaded. Check DATABENTO_API_KEY in pipeline/.env")
-        print("     and verify ATS dataset IDs with --list-only")
     else:
         print(f"\n  ⚠  {quarantined} chunk(s) quarantined. Check validation output above.")
     print("═" * 66 + "\n")
