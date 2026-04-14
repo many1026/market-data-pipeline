@@ -5,7 +5,7 @@ Production-grade pipeline to download raw tick data from [Databento](https://dat
 **Universe:** 144 US equities  
 **Lit venues:** 15 NMS exchanges — schema `mbp-10` (10-level order book)  
 **ATS venues:** FINRA TRFs + direct ATS feeds — schema `trades` (dark pool prints)  
-**Date range:** Jan 2022 – Dec 2024 (36 months)
+**Date range:** Apr 2022 – Apr 2026 (4 years, 48 months)
 
 ---
 
@@ -69,7 +69,7 @@ BigQuery: {PROJECT}.market_data.mbp_10
 | `validator.py` | 8 data quality checks (A–H) |
 | `uploader.py` | Parallel GCS upload + BigQuery load + manifest update |
 | `main.py` | CLI: `download` / `validate` / `upload` |
-| `test_pipeline.py` | Smoke test + dataset discovery (run this first) |
+| `test_pipeline.py` | Parameterized LIT mbp-10 downloader — 15 venues × N tickers × 4 years |
 | `tickers.csv` | 144 ticker symbols (one per line) |
 
 ---
@@ -142,13 +142,30 @@ This calls `db.Historical().metadata.list_datasets()` and prints which configure
 
 ## Usage
 
-### Step 0 — Always run this first
+### test_pipeline.py — LIT mbp-10 full download
+
+Downloads `mbp-10` data for any set of tickers across all 15 LIT US venues for the full 4-year window (2022-04-13 → 2026-04-13). Includes validation and optional GCS upload.
 
 ```bash
 cd pipeline/
-python test_pipeline.py --list-only        # verify API key + ATS dataset IDs
-python test_pipeline.py --skip-ats         # smoke test lit venues only
-python test_pipeline.py                    # full smoke test (lit + ATS)
+
+# Verify API key + available datasets (no download)
+python test_pipeline.py --list-only
+
+# Estimate cost/time before spending API credits (no download)
+python test_pipeline.py --tickers AAPL,MSFT,NVDA --dry-run
+
+# Download specific tickers
+python test_pipeline.py --tickers AAPL,MSFT,NVDA
+
+# Download all tickers from tickers.csv
+python test_pipeline.py
+
+# Skip GCS upload step
+python test_pipeline.py --tickers AAPL --skip-upload
+
+# Force re-download even if cache exists
+python test_pipeline.py --tickers AAPL --force
 ```
 
 ### Step 1 — Dry run (free, no API calls)
@@ -341,8 +358,8 @@ A stock split, reverse split, spin-off, or large special dividend causes an over
 | `LIT_VENUES` | 15 exchanges | All US NMS lit venues |
 | `ATS_VENUES` | 4 venues | FINRA TRFs + Blue Ocean |
 | `TICKERS` | 144 symbols | Read from `tickers.csv` |
-| `START_DATE` | `2022-01-01` | Download window start |
-| `END_DATE` | `2024-12-31` | Download window end |
+| `START_DATE` | `2022-04-13` | Download window start (4-year window) |
+| `END_DATE` | `2026-04-13` | Download window end (today) |
 | `MAX_DOWNLOAD_WORKERS` | `4` | Concurrent Databento API calls |
 | `MAX_UPLOAD_WORKERS` | `6` | Concurrent GCS upload threads |
 | `MAX_VALIDATE_WORKERS` | `4` | Concurrent validation threads |
@@ -396,12 +413,12 @@ gs://{BUCKET}/raw/trades/{symbol}/{symbol}_manifest.json
 | `mbp-10` | 15 lit | ~7,000 | ~5 MB | ~$2.00 |
 | `trades` | 4 ATS/TRF | ~15,000 | ~0.5 MB | ~$0.50 |
 
-Full run estimate (144 tickers × 36 months):
+Full run estimate (144 tickers × 48 months):
 
 | Schema | Chunks | Est. storage | Est. cost |
 |---|---|---|---|
-| `mbp-10` | 77,760 | ~380 GB | ~$760 |
-| `trades` | 20,736 | ~10 GB | ~$5 |
+| `mbp-10` | 103,680 | ~507 GB | ~$1,014 |
+| `trades` | 27,648 | ~14 GB | ~$7 |
 
 Run `python main.py download --mode all --dry-run` for exact numbers per schema before spending any API credits.
 
