@@ -14,7 +14,6 @@ Production-grade pipeline to download raw tick data from [Databento](https://dat
 | Venue type | Schema | Why |
 |---|---|---|
 | Lit exchanges | `mbp-10` | Registered exchanges publish a continuous, public order book. Databento can reconstruct 10 bid and 10 ask price levels in real time. |
-| ATSs / TRFs | `trades` | Dark pools (ATSs) intentionally hide their order books. They only report completed trades to FINRA's Trade Reporting Facilities. No book data is available. |
 
 ---
 
@@ -27,10 +26,6 @@ Databento API
       │         (XNAS, ARCX, BATS, EDGX, XNYS,
       │          BATY, EDGA, XBOS, XPSX, MEMX,
       │          EPRL, IEXG, XCHI, XASE, XCIS)
-      │
-      └── ATS / TRF venues  → schema: trades
-                (FINN.NLS, FNYX.NLS, FINY.NLS, OCEA.MEMOIR)
-
       │ parallel download (4 workers per schema)
       │ atomic writes (.tmp → rename)
       │ retry on failure (3 attempts, 4 s → 60 s backoff)
