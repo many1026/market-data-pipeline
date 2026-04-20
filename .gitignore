@@ -4,3 +4,12 @@ __pycache__/
 cache/
 logs/
 .DS_Store
+
+# Local data and analysis artifacts — not part of the pipeline source
+ohlcv_1h/
+ohlcv_data/
+dark_pool_cache.json
+dark_pool_results.csv
+dark_pool_top150.csv
+analysis/
+*.zip

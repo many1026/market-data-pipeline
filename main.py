@@ -30,6 +30,7 @@ from config import (
     SCHEMA_VENUE_MAP,
     LIT_SCHEMA,
     ATS_SCHEMA,
+    OHLCV_SCHEMA,
     START_DATE,
     END_DATE,
     MAX_DOWNLOAD_WORKERS,
@@ -67,10 +68,13 @@ def _resolve_mode(mode: str) -> list[tuple[str, list[str]]]:
         return [(LIT_SCHEMA, SCHEMA_VENUE_MAP[LIT_SCHEMA])]
     if mode == "ats":
         return [(ATS_SCHEMA, SCHEMA_VENUE_MAP[ATS_SCHEMA])]
-    # "all" → both in order
+    if mode == "ohlcv":
+        return [(OHLCV_SCHEMA, SCHEMA_VENUE_MAP[OHLCV_SCHEMA])]
+    # "all" → all three in order
     return [
-        (LIT_SCHEMA, SCHEMA_VENUE_MAP[LIT_SCHEMA]),
-        (ATS_SCHEMA, SCHEMA_VENUE_MAP[ATS_SCHEMA]),
+        (LIT_SCHEMA,   SCHEMA_VENUE_MAP[LIT_SCHEMA]),
+        (ATS_SCHEMA,   SCHEMA_VENUE_MAP[ATS_SCHEMA]),
+        (OHLCV_SCHEMA, SCHEMA_VENUE_MAP[OHLCV_SCHEMA]),
     ]
 
 
@@ -99,7 +103,7 @@ def _require_gcs_bucket() -> None:
 def _check_tickers() -> None:
     if not TICKERS:
         sys.exit(
-            "\n  ✗  No tickers found. Make sure pipeline/tickers.csv exists.\n"
+            "\n  ✗  No tickers found. Make sure pipeline/tickers.txt exists.\n"
         )
 
 
@@ -316,11 +320,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    _mode_help = "lit (mbp-10, 15 exchanges) | ats (trades, ATS/TRF) | all (default)"
+    _mode_help = "lit (mbp-10, 15 exchanges) | ats (trades, ATS/TRF) | ohlcv (ohlcv-1h, 15 exchanges) | all (default)"
 
     # download
     dl = sub.add_parser("download", help="Download data from Databento")
-    dl.add_argument("--mode", choices=["lit", "ats", "all"], default="all",
+    dl.add_argument("--mode", choices=["lit", "ats", "ohlcv", "all"], default="all",
                     help=_mode_help)
     dl.add_argument("--dry-run", action="store_true",
                     help="Print plan without downloading")
@@ -329,7 +333,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # validate
     va = sub.add_parser("validate", help="Validate cached parquet files")
-    va.add_argument("--mode", choices=["lit", "ats", "all"], default="all",
+    va.add_argument("--mode", choices=["lit", "ats", "ohlcv", "all"], default="all",
                     help=_mode_help)
     va.add_argument("--symbol", default=None, help="Validate single symbol only")
     va.add_argument("--fix-quarantine", action="store_true",
@@ -337,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # upload
     up = sub.add_parser("upload", help="Upload validated chunks to GCS + BigQuery")
-    up.add_argument("--mode", choices=["lit", "ats", "all"], default="all",
+    up.add_argument("--mode", choices=["lit", "ats", "ohlcv", "all"], default="all",
                     help=_mode_help)
     up.add_argument("--overwrite", action="store_true",
                     help="Overwrite existing GCS objects")

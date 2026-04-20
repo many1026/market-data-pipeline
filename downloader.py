@@ -50,6 +50,7 @@ from config import (
     ESTIMATE_RECORDS_PER_CHUNK,
     ESTIMATE_MB_PER_CHUNK,
     ESTIMATE_USD_PER_GB,
+    VENUE_EARLIEST_START,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,14 +121,24 @@ def generate_chunks(
     start_date: str = START_DATE,
     end_date: str = END_DATE,
 ) -> list[ChunkSpec]:
-    """Return all (schema, symbol, venue, month) specs for the given range."""
+    """
+    Return all (schema, symbol, venue, month) specs for the given range.
+
+    Five lit venues only carry ohlcv-1h data from 2023-03-28 onward.
+    Requesting earlier dates causes a 422 error and burns all retry attempts.
+    VENUE_EARLIEST_START clamps the per-venue start so those chunks are simply
+    never generated rather than attempted and failed.
+    """
     tickers = tickers or TICKERS
     venues  = venues  or VENUES
-    months  = pd.period_range(start_date, end_date, freq="M")
 
     chunks = []
     for symbol in tickers:
         for venue in venues:
+            # Clamp start date to the earliest date this venue has data for
+            # the requested schema. Falls back to start_date if not in the dict.
+            venue_start = max(start_date, VENUE_EARLIEST_START.get(venue, start_date))
+            months = pd.period_range(venue_start, end_date, freq="M")
             for month in months:
                 start = month.start_time.strftime("%Y-%m-%dT00:00:00Z")
                 end   = (month + 1).start_time.strftime("%Y-%m-%dT00:00:00Z")
@@ -168,17 +179,17 @@ def validation_report_path(chunk: ChunkSpec) -> Path:
 
 def cache_ok(path: Path) -> tuple[bool, str]:
     """
-    Return (ok, reason). Reads only the first column to verify readability
-    and a non-zero row count.
+    Return (ok, reason). A 0-row file is a valid cache entry (symbol absent
+    at that venue/month) — only return False for missing or unreadable files.
     """
     if not path.exists():
         return False, "missing"
     try:
-        pf = pq.read_table(path, columns=[pq.read_schema(path).names[0]])
-        n = len(pf)
-        if n == 0:
-            return False, "0 rows"
-        return True, f"{n:,} rows"
+        schema = pq.read_schema(path)
+        if not schema.names:
+            return True, "0 rows"
+        pf = pq.read_table(path, columns=[schema.names[0]])
+        return True, f"{len(pf):,} rows"
     except Exception as e:
         return False, f"corrupt: {str(e)[:80]}"
 

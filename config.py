@@ -28,10 +28,10 @@ DATABENTO_API_KEY: str = os.getenv("DATABENTO_API_KEY", "")
 GCS_BUCKET: str        = os.getenv("GCS_BUCKET", "")
 
 # ── Universe ──────────────────────────────────────────────────────────────────
-_tickers_csv = Path(__file__).parent / "tickers.csv"
+_tickers_file = Path(__file__).parent / "tickers.txt"
 TICKERS: list[str] = (
-    pd.read_csv(_tickers_csv, header=None)[0].str.strip().tolist()
-    if _tickers_csv.exists()
+    [t.strip() for t in _tickers_file.read_text().splitlines() if t.strip()]
+    if _tickers_file.exists()
     else []
 )
 
@@ -43,8 +43,9 @@ END_DATE   = "2024-12-31"
 # Schemas
 # ─────────────────────────────────────────────────────────────────────────────
 
-LIT_SCHEMA = "mbp-10"   # Market-by-price, 10 levels — full bid/ask book + trades
-ATS_SCHEMA = "trades"   # Trades only — dark pools have no public order book
+LIT_SCHEMA   = "mbp-10"    # Market-by-price, 10 levels — full bid/ask book + trades
+ATS_SCHEMA   = "trades"    # Trades only — dark pools have no public order book
+OHLCV_SCHEMA = "ohlcv-1h"  # OHLCV hourly bars — compact, cheap, good for lit venues
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Venues
@@ -88,8 +89,9 @@ ATS_VENUES: list[str] = [
 
 # Combined map: schema → venues (used by download orchestrator)
 SCHEMA_VENUE_MAP: dict[str, list[str]] = {
-    LIT_SCHEMA: LIT_VENUES,
-    ATS_SCHEMA: ATS_VENUES,
+    LIT_SCHEMA:   LIT_VENUES,
+    ATS_SCHEMA:   ATS_VENUES,
+    OHLCV_SCHEMA: LIT_VENUES,  # ohlcv-1h available on all 15 lit venues
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,18 +165,33 @@ RETRY_MAX_WAIT  = 60   # seconds
 # mbp-10 is large: 10 price levels × bid+ask price+size+count = 40 fields per row
 # trades is compact: ~5 fields per row
 ESTIMATE_RECORDS_PER_CHUNK: dict[str, int] = {
-    "mbp-10": 7_000,
-    "trades": 15_000,   # more records per chunk (ATSs report many small prints)
+    "mbp-10":   7_000,
+    "trades":   15_000,
+    "ohlcv-1h": 130,    # ~21 trading days × 6.5 h/day per month
 }
 ESTIMATE_MB_PER_CHUNK: dict[str, float] = {
-    "mbp-10": 5.0,
-    "trades": 0.5,
+    "mbp-10":   5.0,
+    "trades":   0.5,
+    "ohlcv-1h": 0.01,   # OHLCV bars are tiny (~5 fields, 130 rows/month)
 }
 ESTIMATE_USD_PER_GB: dict[str, float] = {
-    "mbp-10": 2.00,
-    "trades": 0.50,
+    "mbp-10":   2.00,
+    "trades":   0.50,
+    "ohlcv-1h": 0.30,
+}
+
+# ── Per-venue earliest available start date for ohlcv-1h ─────────────────────
+# Five lit venues only have ohlcv-1h data from 2023-03-28 onward.
+# Requesting data before this date returns a 422 error and wastes 3 retries.
+# generate_chunks() uses this dict to clamp each venue's start date.
+VENUE_EARLIEST_START: dict[str, str] = {
+    "IEXG.TOPS":      "2023-04-01",   # IEX — ohlcv-1h unavailable before this
+    "MEMX.MEMOIR":    "2023-04-01",   # MEMX — launched 2020 but hourly bars start later
+    "XCIS.TRADESBBO": "2023-04-01",   # NYSE National
+    "EPRL.DOM":       "2023-04-01",   # MIAX Pearl Equities
+    "XCHI.PILLAR":    "2023-04-01",   # NYSE Chicago
 }
 
 # ── Backward-compat aliases (used by legacy code / test_pipeline) ─────────────
 VENUES  = LIT_VENUES
-SCHEMAS = [LIT_SCHEMA, ATS_SCHEMA]
+SCHEMAS = [LIT_SCHEMA, ATS_SCHEMA, OHLCV_SCHEMA]
