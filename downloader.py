@@ -50,7 +50,6 @@ from config import (
     ESTIMATE_RECORDS_PER_CHUNK,
     ESTIMATE_MB_PER_CHUNK,
     ESTIMATE_USD_PER_GB,
-    VENUE_EARLIEST_START,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,22 +120,14 @@ def generate_chunks(
     start_date: str = START_DATE,
     end_date: str = END_DATE,
 ) -> list[ChunkSpec]:
-    """
-    Return all (schema, symbol, venue, month) specs for the given range.
-
-    Five lit venues only carry ohlcv-1h data from 2023-03-28 onward.
-    Requesting earlier dates causes a 422 error and burns all retry attempts.
-    VENUE_EARLIEST_START clamps the per-venue start so those chunks are simply
-    never generated rather than attempted and failed.
-    """
+    """Return all (schema, symbol, venue, month) specs for the given range."""
+    from config import VENUE_EARLIEST_START
     tickers = tickers or TICKERS
     venues  = venues  or VENUES
 
     chunks = []
     for symbol in tickers:
         for venue in venues:
-            # Clamp start date to the earliest date this venue has data for
-            # the requested schema. Falls back to start_date if not in the dict.
             venue_start = max(start_date, VENUE_EARLIEST_START.get(venue, start_date))
             months = pd.period_range(venue_start, end_date, freq="M")
             for month in months:

@@ -37,7 +37,7 @@ TICKERS: list[str] = (
 
 # ── Date range ────────────────────────────────────────────────────────────────
 START_DATE = "2022-01-01"
-END_DATE   = "2024-12-31"
+END_DATE   = "2025-12-31"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Schemas
@@ -133,7 +133,7 @@ STALE_QUOTE_SECS = 60           # seconds
 CORP_EVENT_THRESH = 0.30        # 30 % VWAP day-over-day change
 
 # ── Parallelism ───────────────────────────────────────────────────────────────
-MAX_DOWNLOAD_WORKERS  = 4
+MAX_DOWNLOAD_WORKERS  = 12
 MAX_UPLOAD_WORKERS    = 6
 MAX_VALIDATE_WORKERS  = 4
 
@@ -180,18 +180,21 @@ ESTIMATE_USD_PER_GB: dict[str, float] = {
     "ohlcv-1h": 0.30,
 }
 
-# ── Per-venue earliest available start date for ohlcv-1h ─────────────────────
-# Five lit venues only have ohlcv-1h data from 2023-03-28 onward.
-# Requesting data before this date returns a 422 error and wastes 3 retries.
-# generate_chunks() uses this dict to clamp each venue's start date.
-VENUE_EARLIEST_START: dict[str, str] = {
-    "IEXG.TOPS":      "2023-04-01",   # IEX — ohlcv-1h unavailable before this
-    "MEMX.MEMOIR":    "2023-04-01",   # MEMX — launched 2020 but hourly bars start later
-    "XCIS.TRADESBBO": "2023-04-01",   # NYSE National
-    "EPRL.DOM":       "2023-04-01",   # MIAX Pearl Equities
-    "XCHI.PILLAR":    "2023-04-01",   # NYSE Chicago
-}
-
 # ── Backward-compat aliases (used by legacy code / test_pipeline) ─────────────
 VENUES  = LIT_VENUES
 SCHEMAS = [LIT_SCHEMA, ATS_SCHEMA, OHLCV_SCHEMA]
+
+# Venues que no tienen data completa desde START_DATE
+VENUE_EARLIEST_START: dict[str, str] = {
+    "IEXG.TOPS":      "2023-04-01",
+    "MEMX.MEMOIR":    "2023-04-01",
+    "XCIS.TRADESBBO": "2023-04-01",
+    "EPRL.DOM":       "2023-04-01",
+    "XCHI.PILLAR":    "2023-04-01",
+}
+
+# ── OHLCV data directory (used by validator) ──────────────────────────────────
+OHLCV_DATA_DIR = CACHE_DIR / "ohlcv_1h"
+
+# ── Required columns for ohlcv-1h (check D) ──────────────────────────────────
+REQUIRED_COLS["ohlcv-1h"] = ["open", "high", "low", "close", "volume"]
