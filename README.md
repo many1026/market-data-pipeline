@@ -58,35 +58,7 @@ pip3 install pandas numpy pyarrow pytz tqdm python-dotenv \
 
 ---
 
-## Modificaciones al código original
 
-### `config.py`
-Se agregaron al final dos variables que faltaban y que `validator.py` necesita importar:
-
-```python
-# OHLCV data directory
-OHLCV_DATA_DIR = CACHE_DIR / "ohlcv_1h"
-
-# Required columns for ohlcv-1h schema (check D)
-REQUIRED_COLS["ohlcv-1h"] = ["open", "high", "low", "close", "volume"]
-```
-
-### `validator.py`
-Se agregaron al final dos funciones de compatibilidad con `main.py`:
-
-```python
-# 1. Alias directo
-validate_all = validate_all_ohlcv
-
-# 2. Wrapper que entiende la estructura cache/{schema}/{symbol}/{venue}/{YYYY-MM}.parquet
-#    main.py llama validate_all(schema=..., symbol_filter=...)
-#    pero validate_all_ohlcv no acepta `schema` como argumento
-def validate_all(schema, symbol_filter=None):
-    # Consolida todos los chunks de un símbolo, concatena y valida
-    ...
-```
-
----
 
 ## Checks de validación (validator.py)
 
